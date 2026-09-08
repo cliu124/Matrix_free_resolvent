@@ -13,7 +13,7 @@ params.N=params.Nx*params.Ny;
 params.Re=358;
 params.Ly=2;
 params.Lx=2*pi;
-params.gmres_tol=1e-6;
+params.gmres_tol=1e-7;
 params.gmres_restart=250;
 params.gmres_maxit=params.Nx*params.Ny;
 
@@ -40,12 +40,21 @@ opts.maxit = 30;
 opts.p = 8;
 opts.disp=1;
 
+% Shared with H_fun; initialize before the main SVDS run.
+% One row per GMRES call, in execution order (forward and adjoint).
+global gmres_info
+gmres_info = table('Size',[0 7], ...
+    'VariableTypes',{'double','cell','double','double','double','double','double'}, ...
+    'VariableNames',{'solve_index','direction','outer_iterations', ...
+    'inner_iterations','total_inner_iterations','flag','relres'});
+
 matrix_free_svd_cpu_start = cputime;
 [U_mf,S_mf,V_mf] = svds(H_mf,[3*Nx*Ny,3*Nx*Ny],nsv,'largest',opts);
 matrix_free_svd_cpu_time_s = cputime-matrix_free_svd_cpu_start;
 matrix_free_total_cpu_time_s = cputime-matrix_free_total_cpu_start;
 sigma_mf = diag(S_mf);
 disp(table(sigma_mf,'VariableNames',{'sigma_matrix_free'}))
+gmres_average_iterations = mean(gmres_info{:,{'inner_iterations','outer_iterations'}},1); % [mean inner, mean outer]
 
 if compare_full_matrix
     full_matrix_total_cpu_start = cputime;
@@ -450,6 +459,7 @@ end
 
 
 function H_f=H_fun(f,tflag,params)
+    global gmres_info
 
     Ny=params.Ny;
     %Nx=params.Nx;
@@ -484,8 +494,11 @@ function H_f=H_fun(f,tflag,params)
     restart = params.gmres_restart;%min(100,4*Ny);
     maxit = params.gmres_maxit;
 
-    [L_inv_u_p,flag,relres,iter] = gmres(@(u_p) L_fun(u_p,tflag,params),Bf, ...
+    [L_inv_u_p,flag,relres,iter,resvec] = gmres(@(u_p) L_fun(u_p,tflag,params),Bf, ...
         restart,tol,maxit,@(rhs) laplacian_preconditioner_fun(rhs,tflag,params));
+
+    gmres_info(end+1,:) = {height(gmres_info)+1,{tflag}, ...
+        iter(1),iter(2),numel(resvec)-1,flag,relres};
 
    % if strcmp(tflag,'notransp')
         H_f = w_all.^(1/2).*L_inv_u_p(1:3*N,1);
